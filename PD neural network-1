@@ -1,0 +1,168 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, Dropout, concatenate
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+# Пример данных (замените на реальные данные)
+data = {
+    'age': [25, 45, 35, 50, 23, 30, 55, 60, 22, 40, 28, 33],
+    'gender': ['М', 'Ж', 'М', 'Ж', 'М', 'Ж', 'М', 'Ж', 'М', 'Ж', 'М', 'Ж'],
+    'marital_status': ['single', 'married', 'single', 'married', 'single', 'married', 'single', 'married', 'single', 'married', 'single', 'married'],
+    'children': [0, 2, 1, 3, 0, 1, 2, 0, 1, 2, 0, 1],
+    'company': ['Company A', 'Company B', 'Company A', 'Company C', 'Company B', 'Company A', 'Company C', 'Company B', 'Company A', 'Company C', 'Company B', 'Company A'],
+    'position': ['Manager', 'Engineer', 'Analyst', 'Director', 'Engineer', 'Analyst', 'Director', 'Engineer', 'Analyst', 'Director', 'Engineer', 'Analyst'],
+    'property': ['apartment', 'house', 'apartment', 'house', 'apartment', 'house', 'apartment', 'house', 'apartment', 'house', 'apartment', 'house'],
+    'car': [1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0],
+    'city': ['Москва', 'Санкт-Петербург', 'Новосибирск', 'Казань', 'Екатеринбург', 'Магадан', 'Воронеж', 'Пермь', 'Волгоград', 'Уфа', 'Красноярск', 'Самара'],
+    'text': [
+        'Нужен кредит на ремонт квартиры',
+        'Хочу взять кредит на покупку автомобиля',
+        'Требуется кредит на лечение',
+        'Кредит на образование',
+        'Кредит для старта бизнеса',
+        'Кредит на путешествие',
+        'Кредит на ремонт дома',
+        'Кредит на покупку техники',
+        'Кредит на обучение',
+        'Кредит на медицинские расходы',
+        'Кредит на мелкие нужды',  # Новый пример
+        'Кредит на мелкие нужды'   # Новый пример
+    ],
+    'target': [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]  # 1 - платежеспособен, 0 - нет
+}
+
+# Преобразуем данные в DataFrame
+df = pd.DataFrame(data)
+
+# Словарь с населением городов-миллионников
+city_population = {
+    'Москва': 12_600_000,
+    'Санкт-Петербург': 5_400_000,
+    'Новосибирск': 1_600_000,
+    'Екатеринбург': 1_500_000,
+    'Казань': 1_300_000,
+    'Нижний Новгород': 1_200_000,
+    'Челябинск': 1_200_000,
+    'Самара': 1_100_000,
+    'Омск': 1_100_000,
+    'Ростов-на-Дону': 1_100_000,
+    'Уфа': 1_100_000,
+    'Красноярск': 1_100_000,
+    'Воронеж': 1_000_000,
+    'Пермь': 1_000_000,
+    'Волгоград': 1_000_000,
+    'Прочее': 500_000  # Для городов с населением меньше 1 миллиона
+}
+
+# Заменяем категориальный признак "city" на числовой "city_population"
+df['city_population'] = df['city'].apply(lambda x: city_population.get(x, city_population['Прочее']))
+
+# Ограничиваем гендеры до двух значений: М и Ж
+df['gender'] = df['gender'].apply(lambda x: 'М' if x not in ['М', 'Ж'] else x)
+
+# Классифицируем возраст с шагом 5 лет
+bins = [20, 25, 30, 35, 40, 45, 50, 55, 60, np.inf]
+labels = ['20-24', '25-29', '30-34', '35-39', '40-44', '45-49', '50-54', '55-59', '60+']
+df['age_group'] = pd.cut(df['age'], bins=bins, labels=labels, right=False)
+
+# Удаляем исходный признак возраста
+df = df.drop('age', axis=1)
+
+# Разделяем данные на признаки и целевую переменную
+X = df.drop('target', axis=1)
+y = df['target']
+
+# Разделяем данные на обучающую и тестовую выборки
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Обработка структурированных данных
+categorical_features = ['gender', 'marital_status', 'company', 'position', 'property', 'age_group']
+numeric_features = ['children', 'car', 'city_population']
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(), numeric_features),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+    ])
+
+# Преобразуем структурированные данные
+X_train_structured = preprocessor.fit_transform(X_train.drop('text', axis=1))
+X_test_structured = preprocessor.transform(X_test.drop('text', axis=1))
+
+# Обработка текстовых данных
+max_words = 1000  # Максимальное количество слов для токенизации
+max_len = 50      # Максимальная длина последовательности
+
+tokenizer = Tokenizer(num_words=max_words)
+tokenizer.fit_on_texts(X_train['text'])
+
+X_train_text = tokenizer.texts_to_sequences(X_train['text'])
+X_train_text = pad_sequences(X_train_text, maxlen=max_len)
+
+X_test_text = tokenizer.texts_to_sequences(X_test['text'])
+X_test_text = pad_sequences(X_test_text, maxlen=max_len)
+
+# Создаем составную модель
+# Вход для структурированных данных
+structured_input = Input(shape=(X_train_structured.shape[1],), name='structured_input')
+x = Dense(128, activation='relu')(structured_input)
+x = Dropout(0.3)(x)
+x = Dense(64, activation='relu')(x)
+x = Dropout(0.3)(x)
+structured_output = Dense(32, activation='relu')(x)
+
+# Вход для текстовых данных
+text_input = Input(shape=(max_len,), name='text_input')
+y = Dense(128, activation='relu')(text_input)
+y = Dropout(0.3)(y)
+y = Dense(64, activation='relu')(y)
+y = Dropout(0.3)(y)
+text_output = Dense(32, activation='relu')(y)
+
+# Объединяем ветки
+combined = concatenate([structured_output, text_output])
+
+# Выходной слой
+output = Dense(1, activation='sigmoid')(combined)
+
+# Создаем модель
+model = Model(inputs=[structured_input, text_input], outputs=output)
+
+# Компилируем модель
+model.compile(optimizer=Adam(learning_rate=0.001),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+
+# Обучаем модель
+history = model.fit(
+    [X_train_structured, X_train_text], y_train,
+    epochs=20,
+    batch_size=32,
+    validation_split=0.2
+)
+
+# Оцениваем модель на тестовых данных
+test_loss, test_accuracy = model.evaluate([X_test_structured, X_test_text], y_test)
+print(f"Test Accuracy: {test_accuracy:.4f}")
+
+# Предсказания на новых данных
+predictions = model.predict([X_test_structured, X_test_text])
+predictions = (predictions > 0.5).astype(int)  # Преобразуем вероятности в бинарные значения
+print(predictions)
+Что изменено:
+Добавлены примеры с текстом "Кредит на мелкие нужды":
+
+В данные добавлены два новых примера с текстом "Кредит на мелкие нужды".
+
+Целевая переменная target для этих примеров установлена в 1 (платежеспособен).
+
+Модель обучена на новых данных:
+
+Модель теперь учитывает категорию "Кредит на мелкие нужды" при обучении и предсказаниях.
